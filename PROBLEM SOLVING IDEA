@@ -1,0 +1,36 @@
+# AttnFence: Spatial Attention Masking for Diffusion Transformers
+
+A lightweight PyTorch hook to eliminate concept bleeding and attribute leakage in multi-subject video generation without modifying model weights.
+
+## Overview
+
+In diffusion transformers (DiTs), global cross-attention layers often map text tokens across the entire spatial latent grid. When generating frames with multiple distinct subjects, key-query attention distributions overlap, resulting in merged skin tones, shared facial traits, and homogenized clothing.
+
+AttnFence resolves this at the tensor level by intercepting raw attention logits before the softmax pass and applying spatial bounding masks to subject-specific token indices.
+
+## How It Works
+
+1. Identifies token indices corresponding to individual subjects from the prompt sequence.
+2. Creates spatial binary masks matching the latent grid dimensions (height x width).
+3. Modifies the attention score matrix in-place by setting non-target regions to negative infinity prior to softmax.
+4. Allows global context tokens (lighting, background, camera movement) to retain full spatial reach.
+
+## Core Implementation
+
+```python
+import torch
+import torch.nn.functional as F
+
+class AttentionFencer:
+    def __init__(self, token_ranges, spatial_masks):
+        self.token_ranges = token_ranges
+        self.spatial_masks = spatial_masks
+
+    def __call__(self, q, k, v, scale):
+        sim = torch.matmul(q, k.transpose(-1, -2)) * scale
+        for (start, end), mask in zip(self.token_ranges, self.spatial_masks):
+            sim[:, :, :, start:end] = sim[:, :, :, start:end].masked_fill(
+                mask == 0, float('-inf')
+            )
+        attn = F.softmax(sim, dim=-1)
+        return torch.matmul(attn, v)
